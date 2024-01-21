@@ -1,6 +1,6 @@
 # axum-token-auth
 
-`axum-token-auth` is a web application framework that focuses on ergonomics and modularity.
+`axum-token-auth` is middleware to authenticate requests to axum.
 
 [![Build status](https://github.com/strawlab/axum-token-auth/actions/workflows/CI.yml/badge.svg?branch=main)](https://github.com/strawlab/axum-token-auth/actions/workflows/CI.yml)
 [![Crates.io](https://img.shields.io/crates/v/axum-token-auth)](https://crates.io/crates/axum-token-auth)
