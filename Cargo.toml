@@ -32,5 +32,5 @@ tower-cookies = { version = "0.10.0", features = ["signed"] }
 tokio = { version = "1.25", features = ["full"] }
 tower = "0.4.13"
 anyhow = "1"
-if-addrs = "0.11.0"
+if-addrs = "0.12.0"
 cookie = "0.18.0"
