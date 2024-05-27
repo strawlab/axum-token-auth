@@ -27,14 +27,15 @@
 //!
 //! # Typical flow
 //!
-//! 1. A user starts or connects to a server and the user is shown an initial
-//!    authentication token (e.g. the server prints a URL including the token in
-//!    the console).
+//! 1. A user starts or connects to a server and the user is given an initial
+//!    authentication token. (For example, the server prints or shows a QR code
+//!    containing a URL. The URL includes the token.)
 //! 2. The user connects via a browser to the server. In the first HTTP request
 //!    from the user, the token is included in the query parameter in the URL.
 //! 3. A new [SessionKey] is included as a new cookie in the HTTP response to
-//!    the user. The request is further processed by the next service with
-//!    session key information being made available.
+//!    the user. The cookie is stored by the user's browser. On the server, the
+//!    request is further processed by the next service with session key
+//!    information being made available.
 //! 4. Subsequent requests from the user browser include the newly set cookie
 //!    (and no longer include the token in the URL) and the middleware makes the
 //!    session key information available to the next service.

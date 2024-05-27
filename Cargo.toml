@@ -7,7 +7,7 @@ categories = [
     "network-programming",
     "web-programming::http-server",
 ]
-description = "middleware to authenticate requests to axum"
+description = "simple, passwordless authentication middleware for axum"
 homepage = "https://github.com/strawlab/axum-token-auth"
 keywords = ["axum", "passwordless", "login", "authentication", "stateless"]
 license = "MIT"
