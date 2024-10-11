@@ -30,7 +30,7 @@ tower-cookies = { version = "0.10.0", features = ["signed"] }
 
 [dev-dependencies]
 tokio = { version = "1.25", features = ["full"] }
-tower = { version = "0.4.13", features = ["util"] }
+tower = "0.5.1"
 anyhow = "1"
-if-addrs = "0.12.0"
+if-addrs = "0.13.3"
 cookie = "0.18.0"
