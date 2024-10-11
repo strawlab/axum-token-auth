@@ -24,6 +24,7 @@ async fn handle_auth_error(err: tower::BoxError) -> (StatusCode, &'static str) {
 }
 
 async fn user_handler(session_key: SessionKey) -> impl IntoResponse {
+    session_key.is_present();
     Html(format!("hello {:?} <a href=\"/\">index</a>", session_key))
 }
 

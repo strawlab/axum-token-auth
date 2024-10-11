@@ -102,6 +102,16 @@ impl ValidationErrors {
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct SessionKey(pub uuid::Uuid);
 
+impl SessionKey {
+    /// Ensures at compile-time that a session key is present.
+    ///
+    /// A handler which called this method can only be called with a (valid)
+    /// session key and thus do not present a security hole. Furthermore, having
+    /// such a method call in the handler prevents accidental removal of the
+    /// `SessionKey` argument to the handler.
+    pub fn is_present(&self) {}
+}
+
 impl Default for SessionKey {
     fn default() -> Self {
         SessionKey(uuid::Uuid::new_v4())
