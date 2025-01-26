@@ -15,18 +15,18 @@ readme = "README.md"
 repository = "https://github.com/strawlab/axum-token-auth"
 
 [dependencies]
-axum = "0.7.2"
+axum = "0.8.1"
 cookie = "0.18"
 futures-util = "0.3.30"
 http = "1.0.0"
 serde = "1.0.103"
-thiserror = "1.0.10"
+thiserror = "2.0.11"
 url = "2"
 uuid = { version = "1.6", features = ["v4", "serde"] }
 tracing = "0.1.35"
 tower-service = "0.3.1"
 tower-layer = "0.3.2"
-tower-cookies = { version = "0.10.0", features = ["signed"] }
+tower-cookies = { version = "0.11.0", features = ["signed"] }
 
 [dev-dependencies]
 tokio = { version = "1.25", features = ["full"] }

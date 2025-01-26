@@ -70,7 +70,6 @@
 #![deny(missing_docs)]
 
 use axum::{
-    async_trait,
     extract::{FromRequestParts, Request},
     http::{request::Parts, StatusCode},
     response::Response,
@@ -257,7 +256,6 @@ impl AccessInfo {
     }
 }
 
-#[async_trait]
 impl<S> FromRequestParts<S> for SessionKey
 where
     S: Send + Sync,
