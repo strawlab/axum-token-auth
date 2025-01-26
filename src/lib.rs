@@ -184,7 +184,7 @@ pub struct AuthConfig<'a> {
     pub cookie_expires: Option<std::time::Duration>,
 }
 
-impl<'a> Default for AuthConfig<'a> {
+impl Default for AuthConfig<'_> {
     fn default() -> Self {
         Self {
             cookie_name: env!["CARGO_PKG_NAME"],
@@ -195,7 +195,7 @@ impl<'a> Default for AuthConfig<'a> {
     }
 }
 
-impl<'a> AuthConfig<'a> {
+impl AuthConfig<'_> {
     /// Convert [Self] to an [AuthLayer].
     pub fn into_layer(self) -> AuthLayer {
         let access_info = AccessInfo::new(self);
