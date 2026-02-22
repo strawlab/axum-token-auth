@@ -9,8 +9,8 @@
 //! In the normal case, a token is provided out-of-band to the user. For
 //! example, the user will start the server from an SSH session and copy the
 //! token to their browser. Alternatively, if the connection is defined as
-//! trusted (e.g. if it is a loopback connection), authentication occurs without
-//! any check.
+//! trusted (see ["Trusted connection flow", below](#trusted-connection-flow)),
+//! authentication occurs without any check.
 //!
 //! This is useful in cases where a user launches a server process and wants to
 //! achieve network-based control of the server without the server exposing this
@@ -43,7 +43,9 @@
 //! # Trusted connection flow
 //!
 //! In case of a trusted connection, no token is required for initial
-//! authentication. The session key is still issued as above.
+//! authentication. The session key is still issued as above. A "trusted
+//! connection" is defined by setting [AuthConfig::token_config] to `None`. This
+//! is useful when the server is only accessible on a loopback interface.
 //!
 //! # Cookie expiration
 //!
@@ -170,7 +172,7 @@ pub struct AuthConfig<'a> {
     /// The authentication token value and its configuration.
     ///
     /// Set to `None` if the entire connection is trusted (e.g. it is on a
-    /// loopback interface). In this case, token checking is disabled but still
+    /// loopback interface). In this case, token checking is disabled but
     /// [SessionKey] is still provided by [AuthMiddleware].
     pub token_config: Option<TokenConfig>,
     /// If set, the newly set cookie has an Expires field which corresponds the
