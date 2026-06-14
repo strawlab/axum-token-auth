@@ -334,10 +334,14 @@ where
         let signed = cookies.signed(&self.access_info.key);
 
         let err_info = {
+            // A malformed cookie value (e.g. one not parseable as a UUID) is
+            // treated as if no cookie were present rather than panicking.
             let opt_session_key: Option<SessionKey> = signed
                 .get(&self.access_info.cookie_name)
-                .map(|received_cookie| {
-                    SessionKey(uuid::Uuid::parse_str(received_cookie.value()).unwrap())
+                .and_then(|received_cookie| {
+                    uuid::Uuid::parse_str(received_cookie.value())
+                        .ok()
+                        .map(SessionKey)
                 });
 
             // check if authenticated
