@@ -362,6 +362,14 @@ where
                         let mut set_cookie =
                             tower_cookies::Cookie::new(self.access_info.cookie_name.clone(), value);
 
+                        // The cookie is never read by client-side JavaScript, so
+                        // mark it HttpOnly to blunt session theft via XSS, and
+                        // SameSite=Strict to defend against CSRF. (`Secure` is
+                        // left unset so the cookie still works over plain HTTP on
+                        // a loopback interface.)
+                        set_cookie.set_http_only(true);
+                        set_cookie.set_same_site(cookie::SameSite::Strict);
+
                         if let Some(expires) = expires {
                             set_cookie.set_expires(expires);
                         }
@@ -490,6 +498,30 @@ mod tests {
         let res2 = get_second_response(cfg, req).await?;
 
         assert_eq!(res2.status(), StatusCode::OK);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn issued_cookie_is_httponly_and_samesite_strict() -> Result<()> {
+        let mut cfg = get_cfg();
+        cfg.token_config = None;
+        let auth_layer = cfg.into_layer();
+        let svc = ServiceBuilder::new().layer(auth_layer).service_fn(handler);
+
+        let req = Request::builder()
+            .uri("http://example.com/path")
+            .body(Body::empty())
+            .unwrap();
+        let res = svc.oneshot(req).await.unwrap();
+
+        let set_cookie = res
+            .headers()
+            .get(http::header::SET_COOKIE)
+            .unwrap()
+            .to_str()?;
+        let cookie = Cookie::parse(set_cookie.to_string())?;
+        assert_eq!(cookie.http_only(), Some(true));
+        assert_eq!(cookie.same_site(), Some(cookie::SameSite::Strict));
         Ok(())
     }
 }
