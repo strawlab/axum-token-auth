@@ -38,4 +38,4 @@ for inclusion in `axum-token-auth` by you, shall be licensed as MIT, without any
 additional terms or conditions.
 
 [docs]: https://docs.rs/axum-token-auth
-[license]: https://github.com/strawlab/axum-token-auth/blob/main/axum/LICENSE
+[license]: https://github.com/strawlab/axum-token-auth/blob/main/LICENSE
