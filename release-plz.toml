@@ -1,0 +1,19 @@
+[[package]]
+name = "axum-token-auth"
+# Match the existing tag style (v0.1.0, v0.2.0, ...) rather than
+# release-plz's default `{{ package }}-v{{ version }}`.
+git_tag_name = "v{{ version }}"
+
+[changelog]
+# Conventional-commit driven changelog. Commits are grouped by type.
+commit_parsers = [
+  { message = "^feat", group = "Added" },
+  { message = "^fix", group = "Fixed" },
+  { message = "^perf", group = "Performance" },
+  { message = "^refactor", group = "Changed" },
+  { message = "^docs", group = "Documentation" },
+  { message = "^test", group = "Testing" },
+  { message = "^chore\\(release\\)", skip = true },
+  { message = "^chore|^ci|^build", group = "Miscellaneous" },
+  { message = ".*", group = "Other" },
+]
