@@ -306,22 +306,41 @@ fn sign_token(key: &Key, expiry: OffsetDateTime) -> String {
     TOKEN_B64.encode(buf)
 }
 
+/// Reasons a token check can fail, distinguished for diagnostic messages.
+#[derive(Clone, Debug)]
+enum TokenCheckResult {
+    /// Token is valid and not yet expired.
+    Valid,
+    /// No token parameter was present in the query string.
+    NoToken,
+    /// Token's embedded expiry has passed. Carries the expiry timestamp for logging.
+    Expired(OffsetDateTime),
+    /// Token is well-formed but HMAC does not verify (wrong key or corrupted).
+    BadSignature,
+    /// Token is not valid base64url, or too short, or malformed.
+    Malformed,
+    /// Token's version byte is not recognized (wire format version mismatch).
+    UnknownVersion,
+}
+
 /// Verify a token produced by [sign_token]: check the version, the signature (in
-/// constant time), and that it has not yet expired relative to `now`.
-fn verify_token(key: &Key, token: &str, now: OffsetDateTime) -> bool {
+/// constant time), and that it has not yet expired relative to `now`. Returns a
+/// [TokenCheckResult] so callers can distinguish expiry from signature failure
+/// and emit specific diagnostic messages.
+fn verify_token(key: &Key, token: &str, now: OffsetDateTime) -> TokenCheckResult {
     let Ok(buf) = TOKEN_B64.decode(token) else {
-        return false;
+        return TokenCheckResult::Malformed;
     };
     // Layout: version (1 byte) ‖ expiry (8 bytes) ‖ MAC. Split it without any
     // indexing that could panic on a short or truncated token.
     let Some((&version, rest)) = buf.split_first() else {
-        return false;
+        return TokenCheckResult::Malformed;
     };
     if version != TOKEN_VERSION {
-        return false;
+        return TokenCheckResult::UnknownVersion;
     }
     let Some((expiry_bytes, mac_bytes)) = rest.split_first_chunk::<8>() else {
-        return false;
+        return TokenCheckResult::Malformed;
     };
     let expiry_unix = i64::from_le_bytes(*expiry_bytes);
 
@@ -330,12 +349,18 @@ fn verify_token(key: &Key, token: &str, now: OffsetDateTime) -> bool {
         .verify_slice(mac_bytes)
         .is_err()
     {
-        return false;
+        return TokenCheckResult::BadSignature;
     }
 
     match OffsetDateTime::from_unix_timestamp(expiry_unix) {
-        Ok(expiry) => now < expiry,
-        Err(_) => false,
+        Ok(expiry) => {
+            if now < expiry {
+                TokenCheckResult::Valid
+            } else {
+                TokenCheckResult::Expired(expiry)
+            }
+        }
+        Err(_) => TokenCheckResult::Malformed,
     }
 }
 
@@ -622,6 +647,46 @@ struct AccessInfo {
     key: Key,
 }
 
+/// Format a token check result into a human-readable error message, or None if valid.
+fn format_token_error(result: &TokenCheckResult) -> Option<String> {
+    match result {
+        TokenCheckResult::Valid => None,
+        TokenCheckResult::NoToken => Some("no access token in query string".into()),
+        TokenCheckResult::Expired(expiry) => Some(format!("access token expired at {}", expiry)),
+        TokenCheckResult::BadSignature => Some("access token signature invalid".into()),
+        TokenCheckResult::Malformed => Some("access token malformed".into()),
+        // Distinct from `Malformed`: the token decoded cleanly but was minted
+        // by a build using a different wire format, which points at a
+        // version skew rather than a corrupted URL.
+        TokenCheckResult::UnknownVersion => {
+            Some("access token uses an unrecognized format version".into())
+        }
+    }
+}
+
+/// Describes the result of checking for a session cookie.
+#[derive(Clone, Debug)]
+enum SessionCheckResult {
+    /// Session cookie is valid and not yet expired.
+    Valid,
+    /// No session cookie was presented at all.
+    NoCookie,
+    /// A session cookie was presented but could not be parsed or verified.
+    Invalid,
+    /// Session cookie is well-formed and signature-verified but has expired.
+    Expired(OffsetDateTime),
+}
+
+/// Format a session check result into a human-readable error message, or None if valid.
+fn format_session_error(result: &SessionCheckResult) -> Option<String> {
+    match result {
+        SessionCheckResult::Valid => None,
+        SessionCheckResult::NoCookie => Some("no session cookie".into()),
+        SessionCheckResult::Invalid => Some("session cookie invalid".into()),
+        SessionCheckResult::Expired(expiry) => Some(format!("session expired at {}", expiry)),
+    }
+}
+
 impl AccessInfo {
     /// Build access control information from the configuration.
     fn new(cfg: AuthConfig<'_>) -> Self {
@@ -667,28 +732,31 @@ impl AccessInfo {
         self.trusted_networks.iter().any(|net| net.contains(&ip))
     }
 
-    /// Check whether the request carries a valid (signed, unexpired) token, is
-    /// from a trusted overlay network, or is exempt because the connection is
-    /// trusted (no [TokenConfig]).
-    fn check_token(&self, req: &Request, now: OffsetDateTime) -> bool {
+    /// Check whether the request carries a valid (signed, unexpired) token and
+    /// return a result describing success or the nature of the failure. Also
+    /// checks for trusted connections and trusted overlay networks that bypass
+    /// token requirements.
+    fn check_token(&self, req: &Request, now: OffsetDateTime) -> TokenCheckResult {
         // A peer on a trusted overlay network has already been authenticated by
         // that network, so no token is required.
         if self.is_trusted_client(req) {
-            return true;
+            return TokenCheckResult::Valid;
         }
 
         let Some(token_config) = self.token_config.as_ref() else {
             // No token configured: the connection is trusted.
-            return true;
+            return TokenCheckResult::Valid;
         };
 
         let query = req.uri().query().unwrap_or("");
         for (key, value) in url::form_urlencoded::parse(query.as_bytes()) {
-            if key == token_config.name.as_str() && verify_token(&self.key, &value, now) {
-                return true;
+            if key == token_config.name.as_str() {
+                // Token parameter found; return the specific result (valid or one of the failures).
+                return verify_token(&self.key, &value, now);
             }
         }
-        false
+        // No token parameter in the query string.
+        TokenCheckResult::NoToken
     }
 
     /// If this request is a top-level browser navigation carrying a token in
@@ -743,35 +811,41 @@ impl AccessInfo {
     }
 
     /// Decide what to do for this request given any session cookie it presented.
+    /// Also takes the parsed session if it's valid. Collects detailed error
+    /// messages distinguishing session and token failures.
     fn authenticate(
         &self,
         req: &Request,
-        existing: Option<(SessionKey, Option<OffsetDateTime>)>,
+        session_check: SessionCheckResult,
+        existing_session: Option<(SessionKey, Option<OffsetDateTime>)>,
         now: OffsetDateTime,
     ) -> Result<SessionAction, ValidationErrors> {
-        // Discard an existing session whose embedded expiry has passed. A
-        // session with no embedded expiry (a legacy cookie) is always kept.
-        let valid_session =
-            existing.filter(|&(_, expiry)| expiry.is_none_or(|expiry| now < expiry));
-
-        match valid_session {
-            Some((session_key, expiry)) => {
+        // If the session is still valid, use it (and potentially renew it).
+        if let SessionCheckResult::Valid = session_check {
+            if let Some((session_key, expiry)) = existing_session {
                 if self.should_renew(expiry, now) {
-                    Ok(SessionAction::Renew(session_key))
+                    return Ok(SessionAction::Renew(session_key));
                 } else {
-                    Ok(SessionAction::Keep(session_key))
-                }
-            }
-            None => {
-                if self.check_token(req, now) {
-                    Ok(SessionAction::Issue(SessionKey::default()))
-                } else {
-                    Err(ValidationErrors(vec![
-                        "No (valid) token in uri and no (valid) session.".into(),
-                    ]))
+                    return Ok(SessionAction::Keep(session_key));
                 }
             }
         }
+
+        // Session is not valid; try the token path and collect detailed errors.
+        let token_check = self.check_token(req, now);
+        if matches!(token_check, TokenCheckResult::Valid) {
+            return Ok(SessionAction::Issue(SessionKey::default()));
+        }
+
+        // Both session and token failed; collect both error messages.
+        let mut errors = Vec::new();
+        if let Some(session_err) = format_session_error(&session_check) {
+            errors.push(session_err);
+        }
+        if let Some(token_err) = format_token_error(&token_check) {
+            errors.push(token_err);
+        }
+        Err(ValidationErrors(errors))
     }
 
     /// Whether a still-valid session should have its expiry slid forward. We
@@ -898,14 +972,40 @@ where
         let err_info = {
             let now = OffsetDateTime::now_utc();
 
-            // Read and parse any existing session cookie. A malformed cookie is
-            // treated as absent rather than panicking.
-            let existing = signed
-                .get(&self.access_info.cookie_name)
-                .and_then(|received_cookie| parse_session_cookie(received_cookie.value()));
+            // Check whether a session cookie was presented (signed) and whether it's valid.
+            // First, check if the unsigned cookie exists to distinguish "no cookie" from "invalid".
+            let unsigned_cookie_exists = cookies.get(&self.access_info.cookie_name).is_some();
+            let (session_check, existing_session) =
+                if let Some(received_cookie) = signed.get(&self.access_info.cookie_name) {
+                    // A session cookie was presented and its signature verified. Now check expiry.
+                    if let Some(parsed) = parse_session_cookie(received_cookie.value()) {
+                        let (session_key, expiry) = parsed;
+                        if expiry.is_none_or(|expiry| now < expiry) {
+                            (SessionCheckResult::Valid, Some((session_key, expiry)))
+                        } else {
+                            // expiry is Some and has passed
+                            (
+                                SessionCheckResult::Expired(expiry.unwrap()),
+                                Some((session_key, expiry)),
+                            )
+                        }
+                    } else {
+                        // parse_session_cookie failed (malformed value)
+                        (SessionCheckResult::Invalid, None)
+                    }
+                } else if unsigned_cookie_exists {
+                    // An unsigned cookie was presented but signature verification failed.
+                    (SessionCheckResult::Invalid, None)
+                } else {
+                    // No cookie at all.
+                    (SessionCheckResult::NoCookie, None)
+                };
 
             // check if authenticated
-            match self.access_info.authenticate(&request, existing, now) {
+            match self
+                .access_info
+                .authenticate(&request, session_check, existing_session, now)
+            {
                 Ok(action) => {
                     let session_key = action.session_key().clone();
                     request.extensions_mut().insert(session_key.clone());
@@ -1219,19 +1319,39 @@ mod tests {
         let token = sign_token(&key, now + Duration::minutes(5));
 
         // Valid now, expired later.
-        assert!(verify_token(&key, &token, now));
-        assert!(!verify_token(&key, &token, now + Duration::minutes(6)));
+        assert!(matches!(
+            verify_token(&key, &token, now),
+            TokenCheckResult::Valid
+        ));
+        assert!(matches!(
+            verify_token(&key, &token, now + Duration::minutes(6)),
+            TokenCheckResult::Expired(_)
+        ));
 
         // Tampering or a wrong key is rejected.
-        assert!(!verify_token(&key, &format!("{token}x"), now));
-        assert!(!verify_token(&Key::generate(), &token, now));
-        assert!(!verify_token(&key, "not base64!!", now));
+        // Truncated token is too short.
+        assert!(matches!(
+            verify_token(&key, &token[..5], now),
+            TokenCheckResult::Malformed
+        ));
+        assert!(matches!(
+            verify_token(&Key::generate(), &token, now),
+            TokenCheckResult::BadSignature
+        ));
+        // Completely invalid base64 (non-URL-safe characters like spaces and +).
+        assert!(matches!(
+            verify_token(&key, "not base64 string", now),
+            TokenCheckResult::Malformed
+        ));
 
         // A token whose version byte is altered is rejected (the version is
         // authenticated and unknown versions are refused).
         let mut bytes = TOKEN_B64.decode(&token).unwrap();
         bytes[0] = bytes[0].wrapping_add(1);
-        assert!(!verify_token(&key, &TOKEN_B64.encode(bytes), now));
+        assert!(matches!(
+            verify_token(&key, &TOKEN_B64.encode(bytes), now),
+            TokenCheckResult::UnknownVersion
+        ));
     }
 
     #[test]
@@ -1364,6 +1484,94 @@ mod tests {
             .unwrap();
         let res = svc.oneshot(req).await.unwrap();
         assert_eq!(res.status(), StatusCode::OK);
+        Ok(())
+    }
+
+    /// An expired token produces a message containing "expired".
+    #[tokio::test]
+    async fn expired_token_produces_specific_error() -> Result<()> {
+        let cfg = get_cfg();
+        // Create an already-expired token.
+        let expiry = OffsetDateTime::now_utc() - Duration::minutes(1);
+        let token = sign_token(&cfg.persistent_secret, expiry);
+        let token_name = &cfg.token_config.as_ref().unwrap().name;
+        let uri = format!("http://example.com/path?{token_name}={token}");
+
+        let auth_layer = cfg.into_layer();
+        let svc = ServiceBuilder::new().layer(auth_layer).service_fn(handler);
+
+        let req = Request::builder().uri(uri).body(Body::empty()).unwrap();
+        let res = svc.oneshot(req).await;
+        let err = res.err().unwrap();
+        let val_err = err.downcast::<ValidationErrors>().unwrap();
+        let errors: Vec<&str> = val_err.errors().collect();
+        assert!(errors.iter().any(|e| e.contains("expired")));
+        Ok(())
+    }
+
+    /// A token signed with a different key produces the "signature invalid" message.
+    #[tokio::test]
+    async fn token_with_wrong_signature_produces_specific_error() -> Result<()> {
+        let other_key = Key::generate();
+        let now = OffsetDateTime::now_utc();
+        let expiry = now + Duration::minutes(5);
+        let token = sign_token(&other_key, expiry);
+
+        let cfg = get_cfg(); // Uses a different secret
+        let token_name = &cfg.token_config.as_ref().unwrap().name;
+        let uri = format!("http://example.com/path?{token_name}={token}");
+
+        let auth_layer = cfg.into_layer();
+        let svc = ServiceBuilder::new().layer(auth_layer).service_fn(handler);
+
+        let req = Request::builder().uri(uri).body(Body::empty()).unwrap();
+        let res = svc.oneshot(req).await;
+        let err = res.err().unwrap();
+        let val_err = err.downcast::<ValidationErrors>().unwrap();
+        let errors: Vec<&str> = val_err.errors().collect();
+        assert!(errors.iter().any(|e| e.contains("signature")));
+        Ok(())
+    }
+
+    /// Garbage token produces a "malformed" message.
+    #[tokio::test]
+    async fn malformed_token_produces_specific_error() -> Result<()> {
+        let cfg = get_cfg();
+        let token_name = &cfg.token_config.as_ref().unwrap().name;
+        let uri = format!("http://example.com/path?{token_name}=garbage@#$");
+
+        let auth_layer = cfg.into_layer();
+        let svc = ServiceBuilder::new().layer(auth_layer).service_fn(handler);
+
+        let req = Request::builder().uri(uri).body(Body::empty()).unwrap();
+        let res = svc.oneshot(req).await;
+        let err = res.err().unwrap();
+        let val_err = err.downcast::<ValidationErrors>().unwrap();
+        let errors: Vec<&str> = val_err.errors().collect();
+        assert!(errors.iter().any(|e| e.contains("malformed")));
+        Ok(())
+    }
+
+    /// No credentials at all (no session cookie, no token) produces both errors.
+    #[tokio::test]
+    async fn no_credentials_produces_both_errors() -> Result<()> {
+        let cfg = get_cfg();
+        let auth_layer = cfg.into_layer();
+        let svc = ServiceBuilder::new().layer(auth_layer).service_fn(handler);
+
+        // No cookie, no token in URI.
+        let req = Request::builder()
+            .uri("http://example.com/path")
+            .body(Body::empty())
+            .unwrap();
+        let res = svc.oneshot(req).await;
+        let err = res.err().unwrap();
+        let val_err = err.downcast::<ValidationErrors>().unwrap();
+        let errors: Vec<&str> = val_err.errors().collect();
+        // Should contain both "no session cookie" and "no access token" messages.
+        assert!(errors.iter().any(|e| e.contains("session")));
+        assert!(errors.iter().any(|e| e.contains("token")));
+        assert_eq!(errors.len(), 2);
         Ok(())
     }
 }
