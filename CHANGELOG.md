@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2](https://github.com/strawlab/axum-token-auth/compare/v0.3.1...v0.3.2) - 2026-08-15
+
+### Added
+
+- expose token_expiry to read a token's embedded expiry (Claude Opus 5)
+
 ## [0.3.1](https://github.com/strawlab/axum-token-auth/compare/v0.3.0...v0.3.1) - 2026-08-15
 
 ### Added
