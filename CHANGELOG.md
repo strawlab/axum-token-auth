@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Authentication failures now emit specific diagnostic messages distinguishing no session cookie, invalid session signature, expired session, no access token, malformed token, invalid token signature, and expired access token. The `ValidationErrors` type carries all relevant error reasons, allowing clients to provide actionable feedback. (Claude Haiku 4.5)
+- `token_expiry(&str)` reads the expiry embedded in a token so a server can tell an operator when a URL or QR code it handed out stops working, without callers re-deriving the token wire format. It does not verify the signature and must not be used to authorize anything. `OffsetDateTime` is re-exported for its return type. (Claude Opus 5)
 
 ## [0.3.0](https://github.com/strawlab/axum-token-auth/compare/v0.2.1...v0.3.0) - 2026-06-16
 

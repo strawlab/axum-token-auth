@@ -133,7 +133,8 @@ use axum::{
 };
 
 use base64::Engine as _;
-use cookie::time::{Duration, OffsetDateTime, PrimitiveDateTime};
+pub use cookie::time::OffsetDateTime;
+use cookie::time::{Duration, PrimitiveDateTime};
 pub use cookie::{Key, SameSite};
 use futures_util::future::BoxFuture;
 use hmac::{Hmac, Mac};
@@ -323,30 +324,58 @@ enum TokenCheckResult {
     UnknownVersion,
 }
 
+/// Split a token into its `(version, expiry_unix, mac)` parts without
+/// interpreting any of them, or `None` if it is not decodable or is too short
+/// to hold the fixed-size header.
+///
+/// Nothing here is authenticated: the caller decides what to do with the parts.
+fn split_token(token: &str) -> Option<(u8, i64, Vec<u8>)> {
+    let buf = TOKEN_B64.decode(token).ok()?;
+    // Layout: version (1 byte) ‖ expiry (8 bytes) ‖ MAC. Split it without any
+    // indexing that could panic on a short or truncated token.
+    let (&version, rest) = buf.split_first()?;
+    let (expiry_bytes, mac_bytes) = rest.split_first_chunk::<8>()?;
+    Some((
+        version,
+        i64::from_le_bytes(*expiry_bytes),
+        mac_bytes.to_vec(),
+    ))
+}
+
+/// Read the expiry embedded in a token **without verifying its signature**.
+///
+/// This exists so a server can tell an operator when a token it hands out (in a
+/// logged URL, a QR code) stops working, without every caller re-deriving this
+/// crate's wire format. It returns `None` for anything that is not a
+/// well-formed token of a recognised version.
+///
+/// SECURITY: the result is unauthenticated. Anyone can craft a string with any
+/// expiry they like, so this must be used for display and diagnostics only —
+/// never to decide whether a request is authorized. The middleware's own check
+/// ([AuthConfig::into_layer]) is the only thing that may make that decision.
+pub fn token_expiry(token: &str) -> Option<OffsetDateTime> {
+    let (version, expiry_unix, _mac) = split_token(token)?;
+    if version != TOKEN_VERSION {
+        return None;
+    }
+    OffsetDateTime::from_unix_timestamp(expiry_unix).ok()
+}
+
 /// Verify a token produced by [sign_token]: check the version, the signature (in
 /// constant time), and that it has not yet expired relative to `now`. Returns a
 /// [TokenCheckResult] so callers can distinguish expiry from signature failure
 /// and emit specific diagnostic messages.
 fn verify_token(key: &Key, token: &str, now: OffsetDateTime) -> TokenCheckResult {
-    let Ok(buf) = TOKEN_B64.decode(token) else {
-        return TokenCheckResult::Malformed;
-    };
-    // Layout: version (1 byte) ‖ expiry (8 bytes) ‖ MAC. Split it without any
-    // indexing that could panic on a short or truncated token.
-    let Some((&version, rest)) = buf.split_first() else {
+    let Some((version, expiry_unix, mac_bytes)) = split_token(token) else {
         return TokenCheckResult::Malformed;
     };
     if version != TOKEN_VERSION {
         return TokenCheckResult::UnknownVersion;
     }
-    let Some((expiry_bytes, mac_bytes)) = rest.split_first_chunk::<8>() else {
-        return TokenCheckResult::Malformed;
-    };
-    let expiry_unix = i64::from_le_bytes(*expiry_bytes);
 
     // Constant-time signature check.
     if token_mac(key, version, expiry_unix)
-        .verify_slice(mac_bytes)
+        .verify_slice(&mac_bytes)
         .is_err()
     {
         return TokenCheckResult::BadSignature;
@@ -1352,6 +1381,43 @@ mod tests {
             verify_token(&key, &TOKEN_B64.encode(bytes), now),
             TokenCheckResult::UnknownVersion
         ));
+    }
+
+    /// [token_expiry] reports the embedded expiry for display, without needing
+    /// the key and without caring whether the token has already expired.
+    #[test]
+    fn token_expiry_reads_the_embedded_instant() {
+        let key = Key::generate();
+        let now = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+        let expiry = now + Duration::minutes(30);
+        let token = sign_token(&key, expiry);
+
+        assert_eq!(token_expiry(&token), Some(expiry));
+        // Still readable once expired -- that is the point of showing it.
+        assert!(matches!(
+            verify_token(&key, &token, expiry + Duration::seconds(1)),
+            TokenCheckResult::Expired(_)
+        ));
+        assert_eq!(token_expiry(&token), Some(expiry));
+    }
+
+    /// [token_expiry] is deliberately unauthenticated, so it reads a token
+    /// signed by a stranger -- but it still refuses anything that is not a
+    /// well-formed token of a known version.
+    #[test]
+    fn token_expiry_rejects_unparseable_input() {
+        let expiry = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+        let foreign = sign_token(&Key::generate(), expiry);
+        assert_eq!(token_expiry(&foreign), Some(expiry));
+
+        assert_eq!(token_expiry(""), None);
+        assert_eq!(token_expiry("not base64!!"), None);
+        // Decodes cleanly but is shorter than the fixed header.
+        assert_eq!(token_expiry(&TOKEN_B64.encode([1u8, 2, 3])), None);
+
+        let mut bytes = TOKEN_B64.decode(&foreign).unwrap();
+        bytes[0] = bytes[0].wrapping_add(1);
+        assert_eq!(token_expiry(&TOKEN_B64.encode(bytes)), None);
     }
 
     #[test]
