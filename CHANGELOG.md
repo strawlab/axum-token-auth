@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1](https://github.com/strawlab/axum-token-auth/compare/v0.3.0...v0.3.1) - 2026-08-15
+
+### Added
+
+- authentication failures now emit specific diagnostic messages (Claude Opus 5)
+
+### Miscellaneous
+
+- bump actions/checkout to v6 in the release-plz workflow (Claude Opus 4.8)
+
 ### Added
 
 - Authentication failures now emit specific diagnostic messages distinguishing no session cookie, invalid session signature, expired session, no access token, malformed token, invalid token signature, and expired access token. The `ValidationErrors` type carries all relevant error reasons, allowing clients to provide actionable feedback. (Claude Haiku 4.5)
